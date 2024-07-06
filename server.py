@@ -1,37 +1,20 @@
 import asyncio
 import websockets
 import pyaudio
-import wave
 import time
-import os
+from tasks import save_audio_chunk
 
 # Audio settings
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
-SAVE_DIR = "client_audio"
-
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
 
 async def handle_audio(websocket, path, client_id):
     print(f"Client {client_id} connected.")
     audio = pyaudio.PyAudio()
 
-    filename = os.path.join(SAVE_DIR, f"received_audio_{client_id}.wav")
-    wf = wave.open(filename, 'wb')
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(audio.get_sample_size(FORMAT))
-    wf.setframerate(RATE)
-
     buffer = []
-
-    def save_audio():
-        if buffer:
-            wf.writeframes(b''.join(buffer))
-            buffer.clear()
-            print(f"Audio from client {client_id} saved to", filename)
 
     try:
         while True:
@@ -41,8 +24,10 @@ async def handle_audio(websocket, path, client_id):
                     break
                 print(f"Received audio chunk of size {len(data)} from client {client_id}")
                 buffer.append(data)
-                if time.time() % 3 < 0.1:  # Update the file every 3 seconds
-                    save_audio()
+                if len(buffer) * CHUNK >= 3 * RATE:  # Approximately 3 seconds of audio
+                    chunk = b''.join(buffer)
+                    buffer = []
+                    save_audio_chunk.delay(client_id, chunk)
             except websockets.ConnectionClosed:
                 print(f"Connection closed for client {client_id}.")
                 break
@@ -53,9 +38,9 @@ async def handle_audio(websocket, path, client_id):
         print(f"Unexpected server error for client {client_id}: {e}")
     finally:
         if buffer:
-            save_audio()
+            chunk = b''.join(buffer)
+            save_audio_chunk.delay(client_id, chunk)
         audio.terminate()
-        wf.close()
         print(f"Client {client_id} disconnected.")
 
 async def main():
